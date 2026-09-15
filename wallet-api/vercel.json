@@ -5,6 +5,7 @@
     "api/binance.js": { "regions": ["bom1"] },
     "api/okx.js": { "regions": ["bom1"] },
     "api/bsc.js": { "regions": ["bom1"] },
+    "api/portfolio.js": { "regions": ["bom1"] },
     "api/test.js": { "regions": ["bom1"] }
   }
 }
