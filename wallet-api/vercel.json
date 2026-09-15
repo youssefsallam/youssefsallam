@@ -5,12 +5,6 @@
     "api/binance.js": { "regions": ["bom1"] },
     "api/okx.js": { "regions": ["bom1"] },
     "api/bsc.js": { "regions": ["bom1"] },
-    "api/test.js": { "regions": ["bom1"] },
-    "api/test-sin.js": { "regions": ["sin1"] },
-    "api/test-hkg.js": { "regions": ["hkg1"] },
-    "api/test-hnd.js": { "regions": ["hnd1"] },
-    "api/test-icn.js": { "regions": ["icn1"] },
-    "api/test-cpt.js": { "regions": ["cpt1"] },
-    "api/test-syd.js": { "regions": ["syd1"] }
+    "api/test.js": { "regions": ["bom1"] }
   }
 }
