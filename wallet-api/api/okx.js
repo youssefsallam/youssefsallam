@@ -19,7 +19,6 @@ async function okxGet(requestPath, apiKey, secret, passphrase, timestamp) {
     },
     cache: 'no-store'
   });
-
   const text = await r.text();
   let data;
   try { data = JSON.parse(text); } catch { data = text; }
@@ -27,18 +26,15 @@ async function okxGet(requestPath, apiKey, secret, passphrase, timestamp) {
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   const apiKey = String(process.env.OKX_API_KEY || '').trim();
   const secret = String(process.env.OKX_SECRET_KEY || '').trim();
   const passphrase = String(process.env.OKX_PASSPHRASE || '').trim();
 
   if (!apiKey || !secret || !passphrase) {
-    return res.status(500).json({
-      ok: false,
-      region: process.env.VERCEL_REGION || null,
-      error: 'MISSING_OKX_ENV'
-    });
+    return res.status(500).json({ ok: false, error: 'OKX_CONFIG_ERROR' });
   }
 
   try {
@@ -46,45 +42,25 @@ module.exports = async function handler(req, res) {
     const timeJson = await timeResp.json();
     const serverMs = Number(timeJson && timeJson.data && timeJson.data[0] && timeJson.data[0].ts) || Date.now();
     const timestamp = new Date(serverMs).toISOString();
-
     const requestPath = '/api/v5/asset/asset-valuation?ccy=USD';
     const valuation = await okxGet(requestPath, apiKey, secret, passphrase, timestamp);
 
     if (!valuation.ok) {
-      return res.status(valuation.status || 400).json({
-        ok: false,
-        region: process.env.VERCEL_REGION || null,
-        stage: 'asset-valuation',
-        status: valuation.status,
-        data: valuation.data
-      });
+      return res.status(valuation.status || 400).json({ ok: false, error: 'OKX_AUTH_OR_BALANCE_FAILED' });
     }
 
     const body = valuation.data;
     if (!body || String(body.code) !== '0' || !Array.isArray(body.data) || !body.data[0]) {
-      return res.status(400).json({
-        ok: false,
-        region: process.env.VERCEL_REGION || null,
-        stage: 'asset-valuation',
-        data: body
-      });
+      return res.status(400).json({ ok: false, error: 'OKX_INVALID_RESPONSE' });
     }
 
-    const item = body.data[0];
-    const totalUsd = Number(item.totalBal || 0);
-
+    const totalUsd = Number(body.data[0].totalBal || 0);
     return res.status(200).json({
       ok: true,
-      region: process.env.VERCEL_REGION || null,
       totalUsd: Number.isFinite(totalUsd) ? Math.round(totalUsd * 100) / 100 : 0,
-      details: item.details || {},
-      ts: item.ts || null
+      updatedAt: new Date().toISOString()
     });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      region: process.env.VERCEL_REGION || null,
-      error: String(error && error.message ? error.message : error)
-    });
+  } catch {
+    return res.status(500).json({ ok: false, error: 'OKX_INTERNAL_ERROR' });
   }
 };
