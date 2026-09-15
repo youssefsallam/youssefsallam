@@ -41,9 +41,15 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const timeResp = await fetch('https://api.binance.com/api/v3/time', { cache: 'no-store' });
+    const [timeResp, priceResp] = await Promise.all([
+      fetch('https://api.binance.com/api/v3/time', { cache: 'no-store' }),
+      fetch('https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT', { cache: 'no-store' })
+    ]);
+
     const timeJson = await timeResp.json();
+    const priceJson = await priceResp.json();
     const timestamp = Number(timeJson.serverTime || Date.now());
+    const bnbPrice = Number(priceJson && priceJson.price ? priceJson.price : 0);
 
     const common = {
       recvWindow: '10000',
@@ -74,6 +80,7 @@ module.exports = async function handler(req, res) {
       ok: wallet.ok,
       region: process.env.VERCEL_REGION || null,
       signatureValid: true,
+      bnbPrice: Number.isFinite(bnbPrice) && bnbPrice > 0 ? bnbPrice : null,
       wallet
     });
   } catch (error) {
