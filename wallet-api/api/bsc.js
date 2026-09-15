@@ -1,3 +1,54 @@
+const RPC_URL = 'https://bsc-dataseed.binance.org/';
+
+const TOKENS = [
+  { symbol: 'USDT', contract: '0x55d398326f99059ff775485246999027b3197955', decimals: 18, usdPrice: 1 },
+  { symbol: 'USDC', contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', decimals: 18, usdPrice: 1 },
+  { symbol: 'FDUSD', contract: '0xc5f0f7b66764f6ec8c8dff7ba683102295e16409', decimals: 18, usdPrice: 1 },
+  { symbol: 'BUSD', contract: '0xe9e7cea3dedca5984780bafc599bd69add087d56', decimals: 18, usdPrice: 1 }
+];
+
+async function rpc(method, params) {
+  const r = await fetch(RPC_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+    cache: 'no-store'
+  });
+  if (!r.ok) throw new Error('RPC HTTP ' + r.status);
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || 'RPC error');
+  return j.result;
+}
+
+function hexToNumber(hex, decimals) {
+  if (!hex || hex === '0x') return 0;
+  const raw = BigInt(hex);
+  const base = 10n ** BigInt(decimals);
+  const whole = raw / base;
+  const frac = raw % base;
+  return Number(whole) + Number(frac) / Number(base);
+}
+
+function balanceOfData(address) {
+  return '0x70a08231' + address.replace(/^0x/, '').padStart(64, '0');
+}
+
+async function getTokenBalance(address, token) {
+  const result = await rpc('eth_call', [
+    { to: token.contract, data: balanceOfData(address) },
+    'latest'
+  ]);
+  return hexToNumber(result, token.decimals);
+}
+
+async function getBnbPrice() {
+  const r = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=BNBUSDT', { cache: 'no-store' });
+  if (!r.ok) return 0;
+  const j = await r.json();
+  const p = Number(j.price || 0);
+  return Number.isFinite(p) ? p : 0;
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 
@@ -7,117 +58,39 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const base = 'https://web3.binance.com/bapi/defi/v3/public/wallet-direct/buw/wallet/address/pnl/active-position-list';
-    const headers = {
-      'Accept-Encoding': 'identity',
-      'clienttype': 'web',
-      'clientversion': '1.2.0',
-      'User-Agent': 'binance-web3/1.1 (Skill)'
-    };
+    const nativeHex = await rpc('eth_getBalance', [address, 'latest']);
+    const bnb = hexToNumber(nativeHex, 18);
+    const bnbPrice = await getBnbPrice();
 
-    let total = 0;
-    let offset = 0;
-    let pages = 0;
-    let items = 0;
-    const positions = [];
+    const assets = [];
+    let totalUsd = bnb * bnbPrice;
 
-    for (let page = 0; page < 10; page++) {
-      const url = base + '?address=' + encodeURIComponent(address) + '&chainId=56&offset=' + offset;
-      const r = await fetch(url, { method: 'GET', headers, cache: 'no-store' });
-      const text = await r.text();
+    if (bnb > 0) {
+      assets.push({ symbol: 'BNB', balance: bnb, price: bnbPrice, usd: bnb * bnbPrice });
+    }
 
-      if (!r.ok) {
-        return res.status(r.status).json({
-          ok: false,
-          region: process.env.VERCEL_REGION || null,
-          stage: 'binance-web3',
-          status: r.status,
-          body: text.slice(0, 300)
-        });
+    for (const token of TOKENS) {
+      const balance = await getTokenBalance(address, token);
+      if (balance > 0) {
+        const usd = balance * token.usdPrice;
+        totalUsd += usd;
+        assets.push({ symbol: token.symbol, balance, price: token.usdPrice, usd });
       }
-
-      let json;
-      try { json = JSON.parse(text); }
-      catch {
-        return res.status(502).json({
-          ok: false,
-          region: process.env.VERCEL_REGION || null,
-          stage: 'json',
-          body: text.slice(0, 300)
-        });
-      }
-
-      if (String(json.code) !== '000000') {
-        return res.status(502).json({
-          ok: false,
-          region: process.env.VERCEL_REGION || null,
-          stage: 'api',
-          code: json.code,
-          message: json.message || null
-        });
-      }
-
-      const data = json.data || {};
-      const list = Array.isArray(data.list)
-        ? data.list
-        : (Array.isArray(data.activePositionList) ? data.activePositionList : []);
-
-      pages++;
-      items += list.length;
-
-      for (const token of list) {
-        const price = Number(
-          token && token.priceUsd !== undefined ? token.priceUsd :
-          token && token.price !== undefined ? token.price : 0
-        );
-
-        const qty = Number(
-          token && token.quantity !== undefined ? token.quantity :
-          token && token.remainQty !== undefined ? token.remainQty : 0
-        );
-
-        let usd = 0;
-
-        if (Number.isFinite(price) && Number.isFinite(qty)) {
-          usd = price * qty;
-        }
-
-        if ((!Number.isFinite(usd) || usd <= 0) && token) {
-          const directUsd = Number(
-            token.usdValue !== undefined ? token.usdValue :
-            token.valueUsd !== undefined ? token.valueUsd :
-            token.positionValueUsd !== undefined ? token.positionValueUsd : 0
-          );
-          if (Number.isFinite(directUsd)) usd = directUsd;
-        }
-
-        if (Number.isFinite(usd) && usd >= 0.01) {
-          total += usd;
-        }
-
-        if (positions.length < 50) {
-          positions.push({
-            symbol: token && (token.symbol || token.tokenSymbol || token.name) || null,
-            price: Number.isFinite(price) ? price : null,
-            qty: Number.isFinite(qty) ? qty : null,
-            usd: Number.isFinite(usd) ? Math.round(usd * 100) / 100 : null
-          });
-        }
-      }
-
-      if (list.length < 20) break;
-      offset += list.length;
     }
 
     return res.status(200).json({
       ok: true,
       region: process.env.VERCEL_REGION || null,
+      source: 'BSC-RPC',
       address,
       chainId: 56,
-      totalUsd: Math.round(total * 100) / 100,
-      pages,
-      items,
-      positions
+      totalUsd: Math.round(totalUsd * 100) / 100,
+      assets: assets.map(a => ({
+        symbol: a.symbol,
+        balance: Math.round(a.balance * 1e8) / 1e8,
+        price: Math.round(a.price * 1e8) / 1e8,
+        usd: Math.round(a.usd * 100) / 100
+      }))
     });
   } catch (error) {
     return res.status(500).json({
