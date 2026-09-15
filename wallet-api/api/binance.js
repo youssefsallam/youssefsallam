@@ -2,10 +2,7 @@ const crypto = require('crypto');
 
 function signQuery(params, secret) {
   const query = new URLSearchParams(params).toString();
-  const signature = crypto
-    .createHmac('sha256', secret)
-    .update(query)
-    .digest('hex');
+  const signature = crypto.createHmac('sha256', secret).update(query).digest('hex');
   return query + '&signature=' + signature;
 }
 
@@ -16,7 +13,8 @@ async function signedGet(path, params, apiKey, secret) {
     headers: {
       'X-MBX-APIKEY': apiKey,
       'User-Agent': 'Sallam-Wallet-Monitor/1.0'
-    }
+    },
+    cache: 'no-store'
   });
   const text = await r.text();
   let data;
@@ -25,19 +23,14 @@ async function signedGet(path, params, apiKey, secret) {
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  const rawApiKey = process.env.BINANCE_API_KEY || '';
-  const rawSecret = process.env.BINANCE_SECRET_KEY || '';
-  const apiKey = rawApiKey.trim();
-  const secret = rawSecret.trim();
+  const apiKey = String(process.env.BINANCE_API_KEY || '').trim();
+  const secret = String(process.env.BINANCE_SECRET_KEY || '').trim();
 
   if (!apiKey || !secret) {
-    return res.status(500).json({
-      ok: false,
-      region: process.env.VERCEL_REGION || null,
-      error: 'MISSING_BINANCE_ENV'
-    });
+    return res.status(500).json({ ok: false, error: 'BINANCE_CONFIG_ERROR' });
   }
 
   try {
@@ -50,23 +43,11 @@ module.exports = async function handler(req, res) {
     const priceJson = await priceResp.json();
     const timestamp = Number(timeJson.serverTime || Date.now());
     const bnbPrice = Number(priceJson && priceJson.price ? priceJson.price : 0);
-
-    const common = {
-      recvWindow: '10000',
-      timestamp: String(timestamp)
-    };
+    const common = { recvWindow: '10000', timestamp: String(timestamp) };
 
     const account = await signedGet('/api/v3/account', common, apiKey, secret);
-
     if (!account.ok) {
-      return res.status(account.status || 400).json({
-        ok: false,
-        region: process.env.VERCEL_REGION || null,
-        stage: 'signature-test',
-        trimmedWhitespace: rawApiKey !== apiKey || rawSecret !== secret,
-        status: account.status,
-        data: account.data
-      });
+      return res.status(account.status || 400).json({ ok: false, error: 'BINANCE_AUTH_FAILED' });
     }
 
     const wallet = await signedGet(
@@ -76,18 +57,20 @@ module.exports = async function handler(req, res) {
       secret
     );
 
-    return res.status(wallet.ok ? 200 : wallet.status).json({
-      ok: wallet.ok,
-      region: process.env.VERCEL_REGION || null,
+    if (!wallet.ok || !Array.isArray(wallet.data)) {
+      return res.status(wallet.status || 400).json({ ok: false, error: 'BINANCE_BALANCE_FAILED' });
+    }
+
+    return res.status(200).json({
+      ok: true,
       signatureValid: true,
       bnbPrice: Number.isFinite(bnbPrice) && bnbPrice > 0 ? bnbPrice : null,
-      wallet
+      wallet: {
+        data: wallet.data.map(item => ({ balance: String(item && item.balance != null ? item.balance : '0') }))
+      },
+      updatedAt: new Date().toISOString()
     });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      region: process.env.VERCEL_REGION || null,
-      error: String(error && error.message ? error.message : error)
-    });
+  } catch {
+    return res.status(500).json({ ok: false, error: 'BINANCE_INTERNAL_ERROR' });
   }
 };
