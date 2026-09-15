@@ -2,6 +2,9 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "regions": ["bom1"],
   "functions": {
+    "api/binance.js": { "regions": ["bom1"] },
+    "api/okx.js": { "regions": ["bom1"] },
+    "api/bsc.js": { "regions": ["bom1"] },
     "api/test.js": { "regions": ["bom1"] },
     "api/test-sin.js": { "regions": ["sin1"] },
     "api/test-hkg.js": { "regions": ["hkg1"] },
