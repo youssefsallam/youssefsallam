@@ -1,10 +1,10 @@
 const RPC_URL = 'https://bsc-dataseed.binance.org/';
 
 const TOKENS = [
-  { symbol: 'USDT', contract: '0x55d398326f99059ff775485246999027b3197955', decimals: 18, usdPrice: 1 },
-  { symbol: 'USDC', contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', decimals: 18, usdPrice: 1 },
-  { symbol: 'FDUSD', contract: '0xc5f0f7b66764f6ec8c8dff7ba683102295e16409', decimals: 18, usdPrice: 1 },
-  { symbol: 'BUSD', contract: '0xe9e7cea3dedca5984780bafc599bd69add087d56', decimals: 18, usdPrice: 1 }
+  { contract: '0x55d398326f99059ff775485246999027b3197955', decimals: 18, usdPrice: 1 },
+  { contract: '0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d', decimals: 18, usdPrice: 1 },
+  { contract: '0xc5f0f7b66764f6ec8c8dff7ba683102295e16409', decimals: 18, usdPrice: 1 },
+  { contract: '0xe9e7cea3dedca5984780bafc599bd69add087d56', decimals: 18, usdPrice: 1 }
 ];
 
 async function rpc(method, params) {
@@ -14,9 +14,9 @@ async function rpc(method, params) {
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
     cache: 'no-store'
   });
-  if (!r.ok) throw new Error('RPC HTTP ' + r.status);
+  if (!r.ok) throw new Error('RPC_HTTP');
   const j = await r.json();
-  if (j.error) throw new Error(j.error.message || 'RPC error');
+  if (j.error) throw new Error('RPC_ERROR');
   return j.result;
 }
 
@@ -50,7 +50,8 @@ async function getBnbPrice() {
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
   const address = String((req.query && req.query.address) || '').trim().toLowerCase();
   if (!/^0x[a-f0-9]{40}$/.test(address)) {
@@ -61,42 +62,19 @@ module.exports = async function handler(req, res) {
     const nativeHex = await rpc('eth_getBalance', [address, 'latest']);
     const bnb = hexToNumber(nativeHex, 18);
     const bnbPrice = await getBnbPrice();
-
-    const assets = [];
     let totalUsd = bnb * bnbPrice;
-
-    if (bnb > 0) {
-      assets.push({ symbol: 'BNB', balance: bnb, price: bnbPrice, usd: bnb * bnbPrice });
-    }
 
     for (const token of TOKENS) {
       const balance = await getTokenBalance(address, token);
-      if (balance > 0) {
-        const usd = balance * token.usdPrice;
-        totalUsd += usd;
-        assets.push({ symbol: token.symbol, balance, price: token.usdPrice, usd });
-      }
+      if (balance > 0) totalUsd += balance * token.usdPrice;
     }
 
     return res.status(200).json({
       ok: true,
-      region: process.env.VERCEL_REGION || null,
-      source: 'BSC-RPC',
-      address,
-      chainId: 56,
       totalUsd: Math.round(totalUsd * 100) / 100,
-      assets: assets.map(a => ({
-        symbol: a.symbol,
-        balance: Math.round(a.balance * 1e8) / 1e8,
-        price: Math.round(a.price * 1e8) / 1e8,
-        usd: Math.round(a.usd * 100) / 100
-      }))
+      updatedAt: new Date().toISOString()
     });
-  } catch (error) {
-    return res.status(500).json({
-      ok: false,
-      region: process.env.VERCEL_REGION || null,
-      error: String(error && error.message ? error.message : error)
-    });
+  } catch {
+    return res.status(500).json({ ok: false, error: 'BSC_INTERNAL_ERROR' });
   }
 };
