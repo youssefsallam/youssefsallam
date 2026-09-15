@@ -1,10 +1,36 @@
 const crypto = require('crypto');
 
+function signQuery(params, secret) {
+  const query = new URLSearchParams(params).toString();
+  const signature = crypto
+    .createHmac('sha256', secret)
+    .update(query)
+    .digest('hex');
+  return query + '&signature=' + signature;
+}
+
+async function signedGet(path, params, apiKey, secret) {
+  const qs = signQuery(params, secret);
+  const r = await fetch('https://api.binance.com' + path + '?' + qs, {
+    method: 'GET',
+    headers: {
+      'X-MBX-APIKEY': apiKey,
+      'User-Agent': 'Sallam-Wallet-Monitor/1.0'
+    }
+  });
+  const text = await r.text();
+  let data;
+  try { data = JSON.parse(text); } catch { data = text; }
+  return { ok: r.ok, status: r.status, data };
+}
+
 module.exports = async function handler(req, res) {
   res.setHeader('Cache-Control', 'no-store');
 
-  const apiKey = process.env.BINANCE_API_KEY;
-  const secret = process.env.BINANCE_SECRET_KEY;
+  const rawApiKey = process.env.BINANCE_API_KEY || '';
+  const rawSecret = process.env.BINANCE_SECRET_KEY || '';
+  const apiKey = rawApiKey.trim();
+  const secret = rawSecret.trim();
 
   if (!apiKey || !secret) {
     return res.status(500).json({
@@ -15,47 +41,40 @@ module.exports = async function handler(req, res) {
   }
 
   try {
-    const timeResp = await fetch('https://api.binance.com/api/v3/time');
+    const timeResp = await fetch('https://api.binance.com/api/v3/time', { cache: 'no-store' });
     const timeJson = await timeResp.json();
     const timestamp = Number(timeJson.serverTime || Date.now());
 
-    const params = new URLSearchParams({
-      quoteAsset: 'USDT',
-      recvWindow: '5000',
+    const common = {
+      recvWindow: '10000',
       timestamp: String(timestamp)
-    });
+    };
 
-    const signature = crypto
-      .createHmac('sha256', secret)
-      .update(params.toString())
-      .digest('hex');
+    const account = await signedGet('/api/v3/account', common, apiKey, secret);
 
-    const url =
-      'https://api.binance.com/sapi/v1/asset/wallet/balance?' +
-      params.toString() +
-      '&signature=' + signature;
-
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: {
-        'X-MBX-APIKEY': apiKey,
-        'User-Agent': 'Sallam-Wallet-Monitor/1.0'
-      }
-    });
-
-    const text = await response.text();
-    let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
-      data = text;
+    if (!account.ok) {
+      return res.status(account.status || 400).json({
+        ok: false,
+        region: process.env.VERCEL_REGION || null,
+        stage: 'signature-test',
+        trimmedWhitespace: rawApiKey !== apiKey || rawSecret !== secret,
+        status: account.status,
+        data: account.data
+      });
     }
 
-    return res.status(response.ok ? 200 : response.status).json({
-      ok: response.ok,
+    const wallet = await signedGet(
+      '/sapi/v1/asset/wallet/balance',
+      { quoteAsset: 'USDT', ...common },
+      apiKey,
+      secret
+    );
+
+    return res.status(wallet.ok ? 200 : wallet.status).json({
+      ok: wallet.ok,
       region: process.env.VERCEL_REGION || null,
-      status: response.status,
-      data
+      signatureValid: true,
+      wallet
     });
   } catch (error) {
     return res.status(500).json({
