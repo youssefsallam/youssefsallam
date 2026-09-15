@@ -32,27 +32,14 @@ async function bybitGet(path, params, apiKey, secret) {
 }
 
 module.exports = async function handler(req, res) {
-  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
 
-  const plain = String((req.query && req.query.plain) || '') === '1';
   const apiKey = String(process.env.BYBIT_API_KEY || '').trim();
   const secret = String(process.env.BYBIT_SECRET_KEY || '').trim();
 
-  function sendError(code, detail, httpStatus = 500) {
-    if (plain) {
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.status(200).send('ERR:' + code + (detail ? ':' + String(detail).slice(0, 300) : ''));
-    }
-    return res.status(httpStatus).json({
-      ok: false,
-      region: process.env.VERCEL_REGION || null,
-      error: code,
-      detail: detail || null
-    });
-  }
-
   if (!apiKey || !secret) {
-    return sendError('MISSING_BYBIT_ENV', 'BYBIT_API_KEY or BYBIT_SECRET_KEY missing');
+    return res.status(500).json({ ok: false, error: 'BYBIT_CONFIG_ERROR' });
   }
 
   try {
@@ -64,37 +51,21 @@ module.exports = async function handler(req, res) {
     );
 
     if (!overview.ok) {
-      return sendError('HTTP_' + overview.status, JSON.stringify(overview.data), overview.status || 400);
+      return res.status(overview.status || 400).json({ ok: false, error: 'BYBIT_AUTH_OR_BALANCE_FAILED' });
     }
 
     const body = overview.data;
     if (!body || Number(body.retCode) !== 0 || !body.result) {
-      const retCode = body && body.retCode != null ? body.retCode : 'UNKNOWN';
-      const retMsg = body && body.retMsg ? body.retMsg : JSON.stringify(body);
-      return sendError('BYBIT_' + retCode, retMsg, 400);
+      return res.status(400).json({ ok: false, error: 'BYBIT_INVALID_RESPONSE' });
     }
 
     const totalUsd = Number(body.result.totalEquity || 0);
-    const total = Number.isFinite(totalUsd) ? Math.round(totalUsd * 100) / 100 : 0;
-    const list = Array.isArray(body.result.list) ? body.result.list : [];
-
-    if (plain) {
-      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.status(200).send(total.toFixed(2));
-    }
-
     return res.status(200).json({
       ok: true,
-      region: process.env.VERCEL_REGION || null,
-      totalUsd: total,
-      accounts: list.map(item => ({
-        accountType: item.accountType || null,
-        totalEquity: Number(item.totalEquity || 0),
-        valuationCurrency: item.valuationCurrency || 'USD'
-      })),
-      time: body.time || null
+      totalUsd: Number.isFinite(totalUsd) ? Math.round(totalUsd * 100) / 100 : 0,
+      updatedAt: new Date().toISOString()
     });
-  } catch (error) {
-    return sendError('EXCEPTION', String(error && error.message ? error.message : error));
+  } catch {
+    return res.status(500).json({ ok: false, error: 'BYBIT_INTERNAL_ERROR' });
   }
 };
